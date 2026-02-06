@@ -40,32 +40,36 @@ public class DB2Downloader {
 
     public void downloadQueryResults() throws SQLException, IOException {
         final var connection = getDB2Connection(config.url(), config.username(), config.password());
-
         try (final var resultSet = executeQuery(connection, config.query())) {
-            ResultSetMetaData metaData = resultSet.getMetaData();
-            Schema avroSchema = createAvroSchema(metaData);
+            writeResultSetToParquet(resultSet, config.outputPath());
+        }
+    }
 
-            //Path outputPath = new Path("output.parquet");
-            final var outputFile = new LocalOutputFile(Path.of(config.outputPath));
-            Configuration conf = new Configuration();
+    private void writeResultSetToParquet(ResultSet resultSet, String outputPath) throws IOException, SQLException {
+        final var metaData = resultSet.getMetaData();
+        final var avroSchema = createAvroSchema(metaData);
+        final var outputFile = new LocalOutputFile(Path.of(outputPath));
 
-            try (ParquetWriter<GenericRecord> writer = AvroParquetWriter
-                    .<GenericRecord>builder(outputFile)
-                    .withSchema(avroSchema)
-                    .withConf(conf)
-                    .withCompressionCodec(CompressionCodecName.SNAPPY)
-                    .withRowGroupRowCountLimit(config.batchSize())
-                    .build()) {
-
-                while (resultSet.next()) {
-                    GenericRecord record = new GenericData.Record(avroSchema);
-                    for (int i = 1; i <= metaData.getColumnCount(); i++) {
-                        record.put(metaData.getColumnName(i), resultSet.getObject(i));
-                    }
-                    writer.write(record);
+        try (ParquetWriter<GenericRecord> writer = buildParquetWriter(outputFile, avroSchema)) {
+            while (resultSet.next()) {
+                final var record = new GenericData.Record(avroSchema);
+                for (int i = 1; i <= metaData.getColumnCount(); i++) {
+                    record.put(metaData.getColumnName(i), resultSet.getObject(i));
                 }
+                writer.write(record);
             }
         }
+    }
+
+    private ParquetWriter<GenericRecord> buildParquetWriter(LocalOutputFile outputFile, Schema avroSchema) throws IOException {
+        final var conf = new Configuration();
+        return AvroParquetWriter
+                .<GenericRecord>builder(outputFile)
+                .withSchema(avroSchema)
+                .withConf(conf)
+                .withCompressionCodec(CompressionCodecName.SNAPPY)
+                .withRowGroupRowCountLimit(config.batchSize())
+                .build();
     }
 
     public Connection getDB2Connection(String url, String username, String password) throws SQLException {
@@ -78,13 +82,13 @@ public class DB2Downloader {
     }
 
     public ResultSet executeQuery(Connection connection, String query) throws SQLException {
-        PreparedStatement statement = connection.prepareStatement(query);
+        final var statement = connection.prepareStatement(query);
         statement.setFetchSize(config.batchSize());
         return statement.executeQuery();
     }
 
     private Schema createAvroSchema(ResultSetMetaData metaData) throws SQLException {
-        List<Schema.Field> fields = new ArrayList<>();
+        final List<Schema.Field> fields = new ArrayList<>();
         for (int i = 1; i <= metaData.getColumnCount(); i++) {
             String columnName = metaData.getColumnName(i);
             Schema fieldSchema = getAvroType(metaData.getColumnType(i));
