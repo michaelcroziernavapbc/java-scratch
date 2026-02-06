@@ -24,3 +24,4 @@ gradlew.bat
 .DS_Store
 
 db2downloader/jdbc_drivers
+db2downloader/*json
