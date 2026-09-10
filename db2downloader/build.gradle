@@ -8,6 +8,12 @@
 plugins {
     // Apply the application plugin to add support for building a CLI application in Java.
     id 'application'
+    id 'org.graalvm.buildtools.native' version '1.1.11'
+}
+
+configurations {
+    // Hadoop for the read-back test only; deliberately not on any shipped or native classpath.
+    hadoopForRoundTrip
 }
 
 repositories {
@@ -16,14 +22,34 @@ repositories {
 }
 
 dependencies {
-    implementation fileTree(dir: 'jdbc_drivers/', include: ['*.jar'])
-    implementation 'com.google.code.gson:gson:2+'
-    implementation 'org.apache.parquet:parquet-common:1+'
-    implementation 'org.apache.parquet:parquet-avro:1+'
-    implementation 'org.apache.hadoop:hadoop-common:3+'
-    implementation 'org.apache.hadoop:hadoop-client:3+'
-    implementation 'org.apache.hadoop:hadoop-auth:3+'
-    implementation 'org.apache.avro:avro:1+'
+    // jdbc_drivers is normally a symlink to a checkout outside this repo. Overridable with
+    // -PjdbcDriversDir=... so a container build can bind-mount the jars at a real path.
+    implementation fileTree(dir: findProperty('jdbcDriversDir') ?: 'jdbc_drivers/', include: ['*.jar'])
+    implementation 'com.google.code.gson:gson:2.14.0'
+    // parquet-avro pulls in parquet-common/-column/-hadoop. Hadoop itself is 'provided'
+    // in parquet-hadoop's POM, and we never touch the code paths that need it: we write
+    // through LocalOutputFile and configure with PlainParquetConfiguration.
+    implementation('org.apache.parquet:parquet-avro:1.18.0') {
+        // Both are JNI wrappers that unpack a bundled native library at runtime. PureJavaCodecFactory
+        // routes SNAPPY through aircompressor instead, and we emit neither ZSTD nor LZ4.
+        exclude group: 'org.xerial.snappy', module: 'snappy-java'
+        exclude group: 'com.github.luben', module: 'zstd-jni'
+    }
+    implementation 'org.apache.avro:avro:1.12.2'
+
+    // Not shipped. javac needs org.apache.hadoop.fs.Path on the compile classpath only to
+    // resolve the overloaded AvroParquetWriter.builder(); the overload we call takes an
+    // OutputFile. Keeps Hadoop off the runtime classpath and out of the native image.
+    compileOnly 'org.apache.hadoop:hadoop-common:3.5.0'
+    testCompileOnly 'org.apache.hadoop:hadoop-common:3.5.0'
+
+    // Parquet's *reader* is Hadoop-bound (ParquetReader touches org.apache.hadoop.fs.PathFilter), so
+    // reading a file back in a test needs Hadoop even though the shipped write path does not. It is
+    // kept in its own configuration rather than testRuntimeOnly so that `test` and, critically,
+    // `nativeTest` stay Hadoop-free -- nativeTest compiles the test classpath into an image, and
+    // Hadoop would neither fit nor build.
+    hadoopForRoundTrip 'org.apache.hadoop:hadoop-common:3.5.0'
+    hadoopForRoundTrip 'org.apache.hadoop:hadoop-mapreduce-client-core:3.5.0'
 
     // Use JUnit Jupiter for testing.
     testImplementation libs.junit.jupiter
@@ -46,7 +72,120 @@ application {
     mainClass = 'gov.nj.dol.DB2Downloader'
 }
 
+// Hadoop-free tests. These are the ones nativeTest compiles into an image, so they are what
+// actually proves the parquet write path survives ahead-of-time compilation.
 tasks.named('test') {
-    // Use JUnit Platform for unit tests.
-    useJUnitPlatform()
+    useJUnitPlatform {
+        excludeTags 'needs-hadoop'
+    }
+}
+
+// Reads a written file back with parquet's Hadoop-bound reader to confirm the bytes are correct.
+// JVM only.
+tasks.register('roundTripTest', Test) {
+    description = 'Reads parquet output back with the Hadoop-based reader to verify correctness.'
+    group = 'verification'
+    testClassesDirs = sourceSets.test.output.classesDirs
+    classpath = sourceSets.test.runtimeClasspath + configurations.hadoopForRoundTrip
+    useJUnitPlatform {
+        includeTags 'needs-hadoop'
+    }
+}
+
+tasks.named('check') {
+    dependsOn 'roundTripTest'
+}
+
+// The native image only works because Hadoop is absent: parquet's CodecFactory and AvroWriteSupport
+// both reach for it, and we route around both. A stray transitive Hadoop would silently reintroduce
+// ~300 jars of reflection and resource loading, so fail the build instead of discovering it in
+// nativeCompile twenty minutes later.
+tasks.register('checkNoHadoopAtRuntime') {
+    description = 'Fails if Hadoop reappears on the runtime classpath.'
+    group = 'verification'
+    def runtimeArtifacts = configurations.runtimeClasspath.incoming.artifacts.resolvedArtifacts
+            .map { artifacts -> artifacts.collect { it.id.componentIdentifier.displayName } }
+    inputs.property('runtimeArtifacts', runtimeArtifacts)
+    doLast {
+        def offenders = runtimeArtifacts.get().findAll { it.contains('org.apache.hadoop') }
+        if (offenders) {
+            throw new GradleException(
+                    "Hadoop is back on the runtime classpath, which breaks the native build:\n  "
+                            + offenders.join('\n  '))
+        }
+    }
+}
+
+tasks.named('check') {
+    dependsOn 'checkNoHadoopAtRuntime'
+}
+
+graalvmNative {
+    // The shared reachability-metadata repository requires a newer GraalVM schema than the JDK 21
+    // line ships, and this app's dependency set is small enough not to need it. Turn it back on
+    // alongside a GraalVM 25 toolchain if the dependency list ever grows.
+    metadataRepository {
+        enabled = false
+    }
+
+    // Run under the tracing agent with:  ./gradlew -Pagent db2downloader:run --args="job.json"
+    // then fold what it saw into src/main/resources/META-INF/native-image with:
+    //   ./gradlew db2downloader:metadataCopy --task run --dir src/main/resources/META-INF/native-image
+    agent {
+        defaultMode = 'standard'
+        metadataCopy {
+            inputTaskNames.add('run')
+            outputDirectories.add('src/main/resources/META-INF/native-image')
+            mergeWithExisting = true
+        }
+    }
+
+    binaries {
+        // Applies to nativeCompile and nativeTest alike: the test image picks up the same
+        // resource-bundle registrations from main's resources and needs the same treatment.
+        all {
+            // No JVM fallback image: if something is unreachable we want a build failure, not a
+            // binary that silently needs a JDK on the target host.
+            buildArgs.add('--no-fallback')
+
+            // 'compatibility' is the lowest CPU baseline on both AArch64 and x86-64, so one setting
+            // serves both targets and the binary runs on any Graviton or Intel/AMD generation
+            // rather than only on whatever the build host happens to be. This job is bound by
+            // network and disk, not by vector width. Override with -PnativeMarch=x86-64-v3 (or
+            // armv8.1-a, or 'native') if that ever stops being true.
+            buildArgs.add('-march=' + (findProperty('nativeMarch') ?: 'compatibility'))
+
+            // The DB2 JCC driver is closed-source and reflection-heavy; these make its failures
+            // legible instead of surfacing as a bare ClassNotFoundException at 3am.
+            buildArgs.add('-H:+ReportExceptionStackTraces')
+
+            // native-image reads registered resource bundles at build time, which counts as
+            // initializing those classes at build time. The JCC bundles therefore have to be
+            // declared build-time-safe or the build aborts. Both packages hold nothing but
+            // ListResourceBundle subclasses and classes of static string constants, so this is
+            // safe; the two obfuscated bundles are named individually because their packages do
+            // contain real driver logic.
+            buildArgs.add('--initialize-at-build-time=' + [
+                    'com.ibm.db2.jcc.resources',
+                    'sqlj.runtime.error',
+                    'com.ibm.db2.jcc.t2zos.af',
+                    'com.ibm.db2.jcc.uw.ab',
+            ].join(','))
+        }
+
+        main {
+            mainClass = 'gov.nj.dol.DB2Downloader'
+
+            // Name the binary after its target so arm64 and amd64 artifacts coexist. This also
+            // keeps Gradle honest: with a single fixed name, building one architecture and then the
+            // other looks like unchanged inputs producing an existing output, and nativeCompile
+            // gets skipped -- handing you the previous architecture's binary.
+            def targetArch = findProperty('targetArch')
+            imageName = targetArch ? "db2downloader-linux-${targetArch}" : 'db2downloader'
+        }
+    }
+}
+
+tasks.named('nativeCompile') {
+    dependsOn 'checkNoHadoopAtRuntime'
 }
