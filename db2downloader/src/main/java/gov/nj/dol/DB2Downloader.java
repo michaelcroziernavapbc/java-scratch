@@ -20,47 +20,26 @@ import org.apache.parquet.hadoop.ParquetWriter;
 import org.apache.parquet.hadoop.metadata.CompressionCodecName;
 
 import java.sql.ResultSetMetaData;
+import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Date;
 import java.util.List;
 
 /*
-SELECT * FROM OTDUIMP.UIMT_SG02_PAYMENT WHERE SG02_DTE_CLAIM_UIB >= '2025-01-01'
-Time taken for segment SG02: 275935 ms
-
-SELECT * FROM OTDUIMP.UIMT_SG03_EMPLOYER WHERE SG03_DTE_CLAIM_UIB >= '2025-01-01'
-Time taken for segment SG03: 55851 ms
-
-SELECT * FROM OTDUIMP.UIMT_SG05_EXTENSION WHERE SG05_DTE_CLAIM_UIB >= '2025-01-01'
-Time taken for segment SG05: 716 ms
-
-SELECT * FROM OTDUIMP.UIMT_SG07_MONETARY_HISTORY WHERE SG07_DTE_CLAIM_UIB >= '2025-01-01'
-Time taken for segment SG07: 3406 ms
-
-SELECT * FROM OTDUIMP.UIMT_SG10_REAS_ADDL WHERE SG10_DTE_CLAIM_UIB >= '2025-01-01'
-Time taken for segment SG10: 5528 ms
-
-SELECT * FROM OTDUIMP.UIMT_SG11_NONMON WHERE SG11_DTE_CLAIM_UIB >= '2025-01-01'
-Time taken for segment SG11: 90805 ms
-
-SELECT * FROM OTDUIMP.UIMT_SG15_DEPENDENCY WHERE SG15_DTE_CLAIM_UIB >= '2025-01-01'
-Time taken for segment SG15: 555 ms
-
-SELECT * FROM OTDUIMP.UIMT_SG16_REMARKS WHERE SG16_DTE_CLAIM_UIB >= '2025-01-01'
-Time taken for segment SG16: 336413 ms
-
-SELECT * FROM OTDUIMP.UIMT_SG04_EMP_CHARGE WHERE SG04_DTE_CLAIM_UIB >= '2025-01-01'
-Time taken for segment SG04: 276393 ms
-
-SELECT * FROM OTDUIMP.UIMT_SG17_26B_FORM WHERE SG17_DTE_CLAIM_UIB >= '2025-01-01'
-Time taken for segment SG17: 32043 ms
-
-SELECT * FROM OTDUIMP.UIMT_SG18_26B_ROUTING WHERE SG18_DTE_CLAIM_UIB >= '2025-01-01'
-Time taken for segment SG18: 21305 ms
-
-SELECT * FROM OTDUIMP.UIMT_SG19_EMP_289D WHERE SG19_DTE_CLAIM_UIB >= '2025-01-01'
-Time taken for segment SG19: 280 ms
+SELECT * FROM OTDUIMP.UIMT_SG01_CLAIMANT WHERE SG01_DTE_CLAIM_UIB >= (current date - 5 YEAR)
+SELECT * FROM OTDUIMP.UIMT_SG02_PAYMENT WHERE SG02_DTE_CLAIM_UIB >= (current date - 5 YEAR)
+SELECT * FROM OTDUIMP.UIMT_SG03_EMPLOYER WHERE SG03_DTE_CLAIM_UIB >= (current date - 5 YEAR)
+SELECT * FROM OTDUIMP.UIMT_SG05_EXTENSION WHERE SG05_DTE_CLAIM_UIB >= (current date - 5 YEAR)
+SELECT * FROM OTDUIMP.UIMT_SG07_MONETARY_HISTORY WHERE SG07_DTE_CLAIM_UIB >= (current date - 5 YEAR)
+SELECT * FROM OTDUIMP.UIMT_SG10_REAS_ADDL WHERE SG10_DTE_CLAIM_UIB >= (current date - 5 YEAR)
+SELECT * FROM OTDUIMP.UIMT_SG11_NONMON WHERE SG11_DTE_CLAIM_UIB >= (current date - 5 YEAR)
+SELECT * FROM OTDUIMP.UIMT_SG15_DEPENDENCY WHERE SG15_DTE_CLAIM_UIB >= (current date - 5 YEAR)
+SELECT * FROM OTDUIMP.UIMT_SG16_REMARKS WHERE SG16_DTE_CLAIM_UIB >= (current date - 5 YEAR)
+SELECT * FROM OTDUIMP.UIMT_SG04_EMP_CHARGE WHERE SG04_DTE_CLAIM_UIB >= (current date - 5 YEAR)
+SELECT * FROM OTDUIMP.UIMT_SG17_26B_FORM WHERE SG17_DTE_CLAIM_UIB >= (current date - 5 YEAR)
+SELECT * FROM OTDUIMP.UIMT_SG18_26B_ROUTING WHERE SG18_DTE_CLAIM_UIB >= (current date - 5 YEAR)
+SELECT * FROM OTDUIMP.UIMT_SG19_EMP_289D WHERE SG19_DTE_CLAIM_UIB >= (current date - 5 YEAR)
 
 20m
  */
@@ -69,22 +48,26 @@ public class DB2Downloader {
 
     private final Config config;
     private final List<SegmentInfo> segmentsAndQueries = List.of(
-            new SegmentInfo("SG01", "UIMT_SG01_CLAIMANT"),
-            new SegmentInfo("SG02", "UIMT_SG02_PAYMENT"),
-            new SegmentInfo("SG03", "UIMT_SG03_EMPLOYER"),
-            new SegmentInfo("SG05", "UIMT_SG05_EXTENSION"),
-            new SegmentInfo("SG07", "UIMT_SG07_MONETARY_HISTORY"),
-            new SegmentInfo("SG10", "UIMT_SG10_REAS_ADDL"),
-            new SegmentInfo("SG11", "UIMT_SG11_NONMON"),
-            new SegmentInfo("SG15", "UIMT_SG15_DEPENDENCY"),
-            new SegmentInfo("SG16", "UIMT_SG16_REMARKS"),
-            new SegmentInfo("SG04", "UIMT_SG04_EMP_CHARGE"),
-            new SegmentInfo("SG17", "UIMT_SG17_26B_FORM"),
-            new SegmentInfo("SG18", "UIMT_SG18_26B_ROUTING"),
-            new SegmentInfo("SG19", "UIMT_SG19_EMP_289D")
+            new SegmentInfo("SG01", "UIMT_SG01_CLAIMANT", DateFilter.DTE_CLAIM_UIB),
+            new SegmentInfo("SG02", "UIMT_SG02_PAYMENT", DateFilter.DTE_CLAIM_UIB),
+            new SegmentInfo("SG03", "UIMT_SG03_EMPLOYER", DateFilter.DTE_CLAIM_UIB),
+            new SegmentInfo("SG04", "UIMT_SG04_EMP_CHARGE", DateFilter.DTE_CLAIM_UIB),
+            new SegmentInfo("SG05", "UIMT_SG05_EXTENSION", DateFilter.NONE),
+            new SegmentInfo("SG07", "UIMT_SG07_MONETARY_HISTORY", DateFilter.DTE_CLAIM_UIB),
+            new SegmentInfo("SG10", "UIMT_SG10_REAS_ADDL", DateFilter.DTE_CLAIM_UIB),
+            new SegmentInfo("SG11", "UIMT_SG11_NONMON", DateFilter.DTE_CLAIM_UIB),
+            new SegmentInfo("SG15", "UIMT_SG15_DEPENDENCY", DateFilter.DTE_CLAIM_UIB),
+            new SegmentInfo("SG16", "UIMT_SG16_REMARKS", DateFilter.DTE_CLAIM_UIB),
+            new SegmentInfo("SG17", "UIMT_SG17_26B_FORM", DateFilter.DTE_CLAIM_UIB),
+            new SegmentInfo("SG18", "UIMT_SG18_26B_ROUTING", DateFilter.DTE_CLAIM_UIB),
+            new SegmentInfo("SG19", "UIMT_SG19_EMP_289D", DateFilter.DTE_CLAIM_UIB),
+            new SegmentInfo("SG08", "UIMT_SG08_REFUND", DateFilter.DATE_CLAIM),
+            new SegmentInfo("SG09", "UIMT_SG09_REFUND_PAYMENT", DateFilter.DATE_CLAIM),
+            new SegmentInfo("SG14", "UIMT_SG14_COD", DateFilter.DATE_CLAIM)
     );
 
-    private final String dateToday = java.time.LocalDate.now().toString();
+    private final LocalDate today = LocalDate.now();
+    private final String dateToday = today.toString();
 
     public static void main(String[] args) throws Exception {
         final var config = loadConfig(args[0]);
@@ -95,7 +78,7 @@ public class DB2Downloader {
 
     private void downloadAllSegments() throws SQLException, IOException {
         final var connection = getDB2Connection(config.url(), config.username(), config.password());
-        for (var segmentInfo : segmentsAndQueries) {
+        for (var segmentInfo : selectedSegments()) {
             long startTime = System.nanoTime();
 
             String query = formatQueryForSegment(segmentInfo);
@@ -107,12 +90,31 @@ public class DB2Downloader {
         }
     }
 
+    // No "segments" in the config means all of them.
+    private List<SegmentInfo> selectedSegments() {
+        if (config.segments() == null || config.segments().isEmpty()) {
+            return segmentsAndQueries;
+        }
+        final var known = segmentsAndQueries.stream().map(SegmentInfo::segmentName).toList();
+        final var unknown = config.segments().stream().filter(s -> !known.contains(s)).toList();
+        if (!unknown.isEmpty()) {
+            throw new IllegalArgumentException("Unknown segments " + unknown + "; expected some of " + known);
+        }
+        return segmentsAndQueries.stream().filter(s -> config.segments().contains(s.segmentName())).toList();
+    }
+
     private String formatOutputPathForSegment(SegmentInfo segmentInfo) {
         return "output/%s-%s.parquet".formatted(segmentInfo.segmentName, dateToday);
     }
 
     private String formatQueryForSegment(SegmentInfo segmentInfo) {
-        return "SELECT * FROM OTDUIMP.%s WHERE %s_DTE_CLAIM_UIB >= '%s'".formatted(segmentInfo.tableName, segmentInfo.segmentName, config.sinceDate);
+        // A literal date rather than (current date - N MONTH); the DB2 team prefers it.
+        final var sinceDate = today.minusMonths(config.monthsBack());
+        return switch (segmentInfo.dateFilter) {
+            case DTE_CLAIM_UIB -> "SELECT * FROM OTDUIMP.%s WHERE %s_DTE_CLAIM_UIB >= '%s' WITH UR".formatted(segmentInfo.tableName, segmentInfo.segmentName, sinceDate);
+            case DATE_CLAIM -> "SELECT * FROM OTDUIMP.%s WHERE %s_DATE_CLAIM >= '%s' WITH UR".formatted(segmentInfo.tableName, segmentInfo.segmentName, sinceDate);
+            case NONE -> "SELECT * FROM OTDUIMP.%s WITH UR".formatted(segmentInfo.tableName);
+        };
     }
 
 
@@ -203,11 +205,12 @@ public class DB2Downloader {
         }
     }
 
-    public record Config(String url, String username, String password, int batchSize, String sinceDate) {
+    public record Config(String url, String username, String password, int batchSize, int monthsBack, List<String> segments) {
     }
 
-    public record SegmentInfo(String segmentName, String tableName) {
+    // Which claim-date column limits the download; NONE pulls the whole table every time.
+    public enum DateFilter { DTE_CLAIM_UIB, DATE_CLAIM, NONE }
+
+    public record SegmentInfo(String segmentName, String tableName, DateFilter dateFilter) {
     }
-
-
 }
