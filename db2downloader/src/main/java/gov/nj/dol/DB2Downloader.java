@@ -4,6 +4,7 @@ import com.google.gson.Gson;
 
 import java.io.FileReader;
 import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.DriverManager;
@@ -83,6 +84,10 @@ public class DB2Downloader {
 
             String query = formatQueryForSegment(segmentInfo);
             String outputPath = formatOutputPathForSegment(segmentInfo);
+            Path path = Path.of(outputPath).getParent();
+            if (path != null) {
+                Files.createDirectories(path);
+            }
             downloadQueryResults(connection, query, outputPath);
 
             long endTime = System.nanoTime();
@@ -104,7 +109,7 @@ public class DB2Downloader {
     }
 
     private String formatOutputPathForSegment(SegmentInfo segmentInfo) {
-        return "output/%s-%s.parquet".formatted(segmentInfo.segmentName, dateToday);
+        return "output/%s/%s-%s.parquet".formatted(dateToday, segmentInfo.segmentName, dateToday);
     }
 
     private String formatQueryForSegment(SegmentInfo segmentInfo) {
