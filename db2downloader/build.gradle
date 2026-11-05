@@ -155,6 +155,12 @@ graalvmNative {
             // armv8.1-a, or 'native') if that ever stops being true.
             buildArgs.add('-march=' + (findProperty('nativeMarch') ?: 'compatibility'))
 
+            // By default an image carries only a handful of charsets (UTF-8, ISO-8859-1, ...). DB2
+            // returns character data in EBCDIC code pages (Cp500, Cp037, ...) that JCC looks up by
+            // name per column CCSID, so without this the first result set dies with
+            // UnsupportedCharsetException. Costs a few MB; cheaper than guessing every CCSID.
+            buildArgs.add('-H:+AddAllCharsets')
+
             // The DB2 JCC driver is closed-source and reflection-heavy; these make its failures
             // legible instead of surfacing as a bare ClassNotFoundException at 3am.
             buildArgs.add('-H:+ReportExceptionStackTraces')
