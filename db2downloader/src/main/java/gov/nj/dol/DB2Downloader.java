@@ -53,7 +53,7 @@ public class DB2Downloader {
             new SegmentInfo("SG02", "UIMT_SG02_PAYMENT", DateFilter.DTE_CLAIM_UIB),
             new SegmentInfo("SG03", "UIMT_SG03_EMPLOYER", DateFilter.DTE_CLAIM_UIB),
             new SegmentInfo("SG04", "UIMT_SG04_EMP_CHARGE", DateFilter.DTE_CLAIM_UIB),
-            new SegmentInfo("SG05", "UIMT_SG05_EXTENSION", DateFilter.NONE),
+            new SegmentInfo("SG05", "UIMT_SG05_EXTENSION", DateFilter.DTE_CLAIM_UIB),
             new SegmentInfo("SG07", "UIMT_SG07_MONETARY_HISTORY", DateFilter.DTE_CLAIM_UIB),
             new SegmentInfo("SG10", "UIMT_SG10_REAS_ADDL", DateFilter.DTE_CLAIM_UIB),
             new SegmentInfo("SG11", "UIMT_SG11_NONMON", DateFilter.DTE_CLAIM_UIB),
@@ -113,13 +113,22 @@ public class DB2Downloader {
     }
 
     private String formatQueryForSegment(SegmentInfo segmentInfo) {
-        // A literal date rather than (current date - N MONTH); the DB2 team prefers it.
-        final var sinceDate = today.minusMonths(config.monthsBack());
         return switch (segmentInfo.dateFilter) {
-            case DTE_CLAIM_UIB -> "SELECT * FROM OTDUIMP.%s WHERE %s_DTE_CLAIM_UIB >= '%s' WITH UR".formatted(segmentInfo.tableName, segmentInfo.segmentName, sinceDate);
-            case DATE_CLAIM -> "SELECT * FROM OTDUIMP.%s WHERE %s_DATE_CLAIM >= '%s' WITH UR".formatted(segmentInfo.tableName, segmentInfo.segmentName, sinceDate);
-            case NONE -> "SELECT * FROM OTDUIMP.%s WITH UR".formatted(segmentInfo.tableName);
+            case DTE_CLAIM_UIB -> "SELECT * FROM OTDUIMP.%s WHERE %s WITH UR".formatted(segmentInfo.tableName, dateRangeCondition(segmentInfo.segmentName + "_DTE_CLAIM_UIB"));
+            case DATE_CLAIM -> "SELECT * FROM OTDUIMP.%s WHERE %s WITH UR".formatted(segmentInfo.tableName, dateRangeCondition(segmentInfo.segmentName + "_DATE_CLAIM"));
         };
+    }
+
+    // Literal dates rather than (current date - N MONTH); the DB2 team prefers it.
+    // Without an endDate the window runs from today - monthsBack with no upper bound;
+    // with one it runs from endDate - monthsBack through endDate, inclusive.
+    private String dateRangeCondition(String column) {
+        if (config.endDate() == null) {
+            return "%s >= '%s'".formatted(column, today.minusMonths(config.monthsBack()));
+        }
+        final var endDate = LocalDate.parse(config.endDate());
+        final var sinceDate = endDate.minusMonths(config.monthsBack());
+        return "%s >= '%s' AND %s <= '%s'".formatted(column, sinceDate, column, endDate);
     }
 
 
@@ -210,11 +219,12 @@ public class DB2Downloader {
         }
     }
 
-    public record Config(String url, String username, String password, int batchSize, int monthsBack, List<String> segments) {
+    // endDate is optional, ISO format (yyyy-MM-dd).
+    public record Config(String url, String username, String password, int batchSize, int monthsBack, String endDate, List<String> segments) {
     }
 
-    // Which claim-date column limits the download; NONE pulls the whole table every time.
-    public enum DateFilter { DTE_CLAIM_UIB, DATE_CLAIM, NONE }
+    // Which claim-date column limits the download.
+    public enum DateFilter { DTE_CLAIM_UIB, DATE_CLAIM }
 
     public record SegmentInfo(String segmentName, String tableName, DateFilter dateFilter) {
     }
